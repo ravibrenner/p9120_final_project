@@ -1,0 +1,128 @@
+---
+title: "Data processing"
+author: "Ravi Brenner"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+```
+
+```{r}
+df <- read_csv("all_stocks_2017-01-01_to_2018-01-01.csv") |>
+  arrange(Name,Date) |>
+  group_by(Name) |>
+  fill(everything(), .direction = "down") |>
+  ungroup()
+```
+
+some definitions
+```{r}
+seq_len <- 10
+target_var <- "Close"
+ticker_col <- "Name"
+feature_cols <- c("Open","High","Low","Close","Volume")
+```
+
+
+```{r}
+# ticker list
+ticker_list = unique(df$Name)
+id_mapping <- setNames(1:(length(ticker_list)), ticker_list)
+
+# scaling
+scaler_fit <- df |>
+  select(Name, all_of(feature_cols)) |>
+  group_by(Name) |>
+  summarise(across(everything(), 
+                   .fns = list(min = ~min(., na.rm = TRUE), 
+                               max = ~max(., na.rm = TRUE))))
+
+df_scaled <- df |>
+  group_by(Name) |>
+  mutate(across(all_of(feature_cols), 
+                \(x) (x - min(x)) / (max(x) - min(x))))
+
+# train/test split
+split_by_stock <- function(data, prop){
+  
+  for (i in 1:length(ticker_list)){
+    curr_data = data |>
+      filter(Name == ticker_list[i])
+    
+    curr_stock_split = initial_time_split(curr_data,
+                                          prop = prop)
+    if (i == 1){
+      output_train = training(curr_stock_split)
+      output_test = testing(curr_stock_split)
+    } else {
+      output_train = bind_rows(output_train, training(curr_stock_split))
+      output_test = bind_rows(output_test, testing(curr_stock_split))
+    }
+  }
+  return(list(output_train, output_test))
+}
+split_df = split_by_stock(df_scaled, 0.8)
+df_train = split_df[[1]] |> ungroup()
+df_test = split_df[[2]] |> ungroup()
+
+
+#sequnce creation
+create_sequences_r <- function(df, seq_len, target_var, features_list, ticker_col, id_mapping) {
+  X_sequences_list <- list()
+  y_targets_list <- c()
+  ticker_indices_list <- c()
+  
+  # Grouping and iterating
+  groups <- df %>% group_by(!!sym(ticker_col))
+  
+  for (ticker_val in unique(groups[[ticker_col]])) {
+    group <- groups %>% filter(!!sym(ticker_col) == ticker_val)
+
+    ticker_idx <- id_mapping[[ticker_val]]
+    
+    features_matrix <- group %>% select(all_of(features_list)) %>% as.matrix()
+    target_vector <- group %>% pull(!!sym(target_var))
+    
+    n_rows <- nrow(group)
+    
+    # Sliding Window Creation
+    for (i in 1:(n_rows - seq_len)) {
+      # X: Sub-matrix of features
+      X <- features_matrix[i : (i + seq_len), -1]
+      # y: Single target value
+      y <- target_vector[i + seq_len]
+      
+      X_sequences_list[[length(X_sequences_list) + 1]] <- X
+      y_targets_list <- c(y_targets_list, y)
+      ticker_indices_list <- c(ticker_indices_list, ticker_idx)
+    }
+  }
+  
+  # Convert list of matrices into a single 3D array
+  # Dim: (Samples, Timesteps, Features)
+  X_array <- array(
+    data = unlist(X_sequences_list),
+    dim = c(seq_len, length(features_list), length(X_sequences_list))
+  )
+  # R stores arrays column-major (features first), so transpose to row-major (samples first)
+  # Final Dim: (Samples, Timesteps, Features)
+  X_array <- aperm(X_array, c(3, 1, 2)) 
+  
+  # Convert vectors to arrays/matrices for consistency
+  y_array <- as.array(y_targets_list)
+  ticker_array <- as.array(ticker_indices_list)
+  
+  return(list(X = X_array, y = y_array, ticker = ticker_array))
+}
+
+train_sequences <- create_sequences_r(df_train, seq_len, target_var, feature_cols, ticker_col, id_mapping)
+
+test_sequences <- create_sequences_r(df_test, seq_len, target_var, feature_cols, ticker_col, id_mapping)
+
+# load into torch
+
+```
+
+

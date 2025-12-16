@@ -1,0 +1,237 @@
+---
+title: "Ensemble Trees"
+author: "Ravi Brenner"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+data(ames)
+data(credit_data)
+```
+
+```{r}
+set.seed(2025)
+
+ames_split <- initial_split(ames, prop = 0.8)
+ames_train <- training(ames_split)
+ames_test <- testing(ames_split)
+ames_cv <- vfold_cv(ames_train)
+
+credit_split <- initial_split(credit_data, prop = 0.8, strata = Status)
+credit_train <- training(credit_split)
+credit_test <- testing(credit_split)
+credit_cv <- vfold_cv(credit_train)
+```
+
+
+# CART
+as a baseline
+
+## Regression case
+
+```{r}
+cart_mod <- 
+  decision_tree(mode = "regression",
+                engine = "rpart",
+                cost_complexity = tune(),
+                tree_depth = 30,
+                min_n = 20) 
+
+reg_recipe <- 
+  recipe(Sale_Price ~ ., data = ames_train)
+
+cart_workflow <- 
+  workflow() |> 
+  add_model(cart_mod) |> 
+  add_recipe(reg_recipe)
+
+cp_grid <- tibble(cost_complexity = 10^seq(-6, -2, length.out = 30))
+
+cart_res <- tune_grid(cart_workflow,
+                      resamples = ames_cv,
+                      grid = cp_grid,
+                      control = control_grid(save_pred = TRUE),
+                      metrics = metric_set(rmse))
+
+collect_metrics(cart_res) |>
+  ggplot(aes(x = cost_complexity, y = mean)) + 
+  geom_point() + 
+  scale_x_log10()
+
+cart_best <- select_best(cart_res, metric = "rmse")
+
+cart_final_workflow <-
+  cart_workflow |>
+  finalize_workflow(cart_best)
+
+cart_fit <-
+  cart_final_workflow |>
+  fit(data = ames_train)
+
+cart_test_pred <-
+  predict(cart_fit, new_data = ames_test) |>
+  bind_cols(ames_test |> select(Sale_Price)) # Add the true outcome
+
+cart_test_pred |>
+  summarize(bias_sq = (mean(.pred) - mean(Sale_Price))^2,
+            variance = stats::var(.pred),
+            mse = mean((.pred - Sale_Price)^2))
+
+# Calculate the test set bias, variance, MSE with bootstrapping
+bias_var_mse_bootstrap <- function(workflow_in, train_data, test_data){
+  fit_model <- function(split, workflow) {
+    fit(workflow, data = training(split))
+  }
+  
+  set.seed(2025)
+  ames_bootstraps <- bootstraps(train_data, times = 50)
+  
+  all_predictions <-
+    ames_bootstraps |>
+    mutate(
+      model_fit = map(splits, fit_model, workflow = workflow_in),
+      predictions = map(model_fit, ~ predict(.x, new_data = test_data) |> rename(pred = .pred))
+    )
+  
+  prediction_df <-
+    all_predictions |>
+    select(id, predictions) |>
+    unnest(predictions) |>
+    group_by(id) |>
+    mutate(Sale_Price = rep(test_data$Sale_Price, length.out = n()),
+           obs_id = row_number()) |>
+    ungroup()
+  
+  mse_df <-
+    prediction_df |>
+    group_by(obs_id) |>
+    summarise(
+      bias_sq = (mean(pred) - mean(Sale_Price))^2,
+      variance = stats::var(pred),
+      mse = mean((pred - Sale_Price)^2),
+      avg_sale_price = mean(Sale_Price)
+    ) |>
+    ungroup() |>
+    summarise(
+      mean_bias_sq = mean(bias_sq),
+      mean_variance = mean(variance),
+      mean_mse = mean(mse),
+      irr_error = mean_mse - mean_bias_sq - mean_variance
+    )
+  
+  return(mse_df)
+}
+
+cart_tradeoff <- bias_var_mse_bootstrap(cart_final_workflow, ames_train, ames_test) |>
+  mutate(rmse = sqrt(mean_mse))
+```
+
+-- misclassification, gini, or cross entropy loss for classification
+
+## classification
+
+
+
+often has high variance SHOW THIS VIA BOOTSTRAPPING?
+
+# Bagging
+
+```{r}
+bag_mod <- 
+  rand_forest(mode = "regression",
+              engine = "ranger",
+              mtry = ncol(ames) - 1,
+              trees = 100,
+              min_n = 20) 
+
+reg_recipe <- 
+  recipe(Sale_Price ~ ., data = ames_train)
+
+bag_workflow <- 
+  workflow() |> 
+  add_model(bag_mod) |> 
+  add_recipe(reg_recipe)
+
+
+bag_res <- fit_resamples(bag_workflow,
+                          resamples = ames_cv,
+                          control = control_grid(save_pred = TRUE),
+                          metrics = metric_set(rmse))
+
+bag_fit <-
+  bag_workflow |>
+  fit(data = ames_train)
+
+bag_test_pred <-
+  predict(bag_fit, new_data = ames_test) |>
+  bind_cols(ames_test |> select(Sale_Price)) # Add the true outcome
+
+bag_test_pred |>
+  summarize(bias_sq = (mean(.pred) - mean(Sale_Price))^2,
+            variance = stats::var(.pred),
+            mse = mean((.pred - Sale_Price)^2))
+
+
+bag_tradeoff <- bias_var_mse_bootstrap(bag_workflow, ames_train, ames_test) |>
+  mutate(rmse = sqrt(mean_mse));bag_tradeoff
+```
+
+
+Show that variance is reduced relative to CART
+
+# Random Forests
+
+should reduce variance relative to bagging, especially when predictors are correlated may need to sim this
+
+```{r}
+rf_mod <- 
+  rand_forest(mode = "regression",
+              engine = "ranger",
+              mtry = floor((ncol(ames) - 1)/3),
+              trees = 100,
+              min_n = 20) 
+
+reg_recipe <- 
+  recipe(Sale_Price ~ ., data = ames_train)
+
+rf_workflow <- 
+  workflow() |> 
+  add_model(rf_mod) |> 
+  add_recipe(reg_recipe)
+
+
+rf_res <- fit_resamples(rf_workflow,
+                          resamples = ames_cv,
+                          control = control_grid(save_pred = TRUE),
+                          metrics = metric_set(rmse))
+
+rf_fit <-
+  rf_workflow |>
+  fit(data = ames_train)
+
+rf_test_pred <-
+  predict(rf_fit, new_data = ames_test) |>
+  bind_cols(ames_test |> select(Sale_Price)) # Add the true outcome
+
+rf_test_pred |>
+  summarize(bias_sq = (mean(.pred) - mean(Sale_Price))^2,
+            variance = stats::var(.pred),
+            mse = mean((.pred - Sale_Price)^2))
+
+
+rf_tradeoff <- bias_var_mse_bootstrap(rf_workflow, ames_train, ames_test) |>
+  mutate(rmse = sqrt(mean_mse));rf_tradeoff
+```
+
+
+## show that when num predictors = ncol(data), you get back same results as bagging
+
+## compare probability averaging with consensus voting
+
+## OOB vs cross validation?
