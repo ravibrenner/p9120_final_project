@@ -249,7 +249,25 @@ cart_short_tradeoff |>
                values_to = "value") |>
   ggplot(aes(x = name)) +
   geom_bar(aes(y = value, fill = variable),
-           position = "stack", stat = "identity")
+           position = "dodge", stat = "identity") +
+  geom_point(aes(y = 20000*rmse),
+             color = "red") + 
+  scale_fill_discrete(name = "Component of MSE",
+                      labels = c("Error",
+                                 "Bias^2",
+                                 "Variance")) + 
+  scale_y_continuous(sec.axis = sec_axis(transform = ~./20000,
+                                         name = "RMSE")) +
+  labs(x = NULL,
+       y = "Value",
+       title = "Bias-Variance Tradeoff for Regression") +
+  theme_minimal() +
+  theme(axis.text.y.right = element_text(color = "red"),
+        axis.title.y.right = element_text(color = "red"),
+        legend.position = "bottom")
+
+ggsave("output/reg_bv_results.jpg",
+       width = 6.5, height = 4)
 ```
 
 ## how well does CV and OOB approximate the error?
@@ -269,30 +287,54 @@ rf_res <- fit_resamples(rf_workflow,
                           metrics = metric_set(rmse),
                           resamples = ames_cv)
 
-cart_res |> 
-  collect_metrics()
+error_comp_df <- tibble(
+  model = c("CART","Bagging","RF"),
+  cv_error = c(
+    cart_res |> 
+      collect_metrics() |>
+      pull(mean),
+    bag_res |>
+      collect_metrics() |>
+      pull(mean),
+    rf_res |>
+      collect_metrics() |>
+      pull(mean)
+  ),
+  oob_error = c(
+    NA,
+    bag_fit |> 
+      extract_fit_engine() |>
+      pluck("prediction.error") |>
+      sqrt(),
+    rf_fit |> 
+      extract_fit_engine() |>
+      pluck("prediction.error") |>
+      sqrt()
+  ),
+  bootstrap_test_errorr = c(
+    cart_tradeoff$rmse,
+    bag_tradeoff$rmse,
+    rf_tradeoff$rmse
+  )
+)
 
-cart_tradeoff$rmse
+error_comp_df |>
+  mutate(model = factor(model,levels=c("CART","Bagging","RF"))) |>
+  pivot_longer(-model) |>
+  ggplot(aes(x = model, y = value, fill = name)) + 
+  geom_bar(stat = "identity",
+           position = "dodge") + 
+  scale_fill_discrete(name = "RMSE type",
+                      labels = c("Bootstrap test error",
+                                 "CV error",
+                                 "OOB error")) +
+  labs(x = NULL,
+       y = "RMSE",
+       title = "Regression Error approximations") + 
+  theme_minimal()
 
-bag_res |>
-  collect_metrics()
-
-bag_fit |> 
-  extract_fit_engine() |>
-  pluck("prediction.error") |>
-  sqrt()
-
-bag_tradeoff$rmse
-
-rf_res |>
-  collect_metrics()
-
-rf_fit |> 
-  extract_fit_engine() |>
-  pluck("prediction.error") |>
-  sqrt()
-
-rf_tradeoff$rmse
+ggsave("output/reg_error_approx.jpg",
+       width = 6.5, height = 4)
 ```
 
 
@@ -354,19 +396,6 @@ bias_var_mse_class <- function(pred_df){
   
   return(mse_df)
 }
-
-cart_class_boot_preds |>
-mutate(status_int = if_else(Status == "good",1,0)) |>
-    group_by(obs_id) |>
-    summarise(
-      mode_class = DescTools::Mode(pred),
-      bias = mean(mode_class != Status),
-      bias_2 = (mean(.pred_good) - mean(status_int))^2,
-      variance = mean(pred != mode_class),
-      variance_2 = stats::var(.pred_good),
-      mse = mean((.pred_good - status_int)^2),
-      loss = mean(pred != Status)
-    ) 
 ```
 
 
@@ -436,7 +465,7 @@ bag_mod <-
               trees = 100,
               min_n = 20)  |>
   set_engine("ranger",
-             probability = FALSE)
+             probability = TRUE)
 
 bag_workflow <- 
   workflow() |> 
@@ -462,7 +491,10 @@ rf_mod <-
               trees = 100,
               min_n = 20)  |>
   set_engine("ranger",
-             probability = FALSE)
+             probability = TRUE)
+
+class_recipe <- 
+  recipe(Status ~ ., data = credit_train)
 
 rf_workflow <- 
   workflow() |> 
@@ -497,21 +529,21 @@ rf_mod <-
               trees = 100,
               min_n = 20)  |>
   set_engine("ranger",
-             probability = FALSE)
+             probability = TRUE)
 
 class_recipe <- 
   recipe(Status ~ ., data = credit_train_rand)
 
-rf_workflow <- 
+rf_p_workflow <- 
   workflow() |> 
   add_model(rf_mod) |> 
   add_recipe(class_recipe)
 
-rf_fit <-
-  rf_workflow |>
+rf_p_fit <-
+  rf_p_workflow |>
   fit(data = credit_train_rand)
 
-rf_small_class_boot_preds <- class_bootstrap(rf_workflow, credit_train_rand, credit_test_rand)
+rf_small_class_boot_preds <- class_bootstrap(rf_p_workflow, credit_train_rand, credit_test_rand)
 
 rf_small_class_tradeoff <- bias_var_mse_class(rf_small_class_boot_preds)
 ```
@@ -528,13 +560,31 @@ cart_short_class_tradeoff |>
   bind_rows(rf_class_tradeoff |>
               mutate(name = "4. RF")) |>
   bind_rows(rf_small_class_tradeoff |>
-              mutate(name = "5. RF small")) |>
+              mutate(name = "5. RF many p")) |>
   pivot_longer(cols = c(mean_bias_2, mean_var_2, irr_error),
                names_to = "variable",
                values_to = "value") |>
   ggplot(aes(x = name)) +
   geom_bar(aes(y = value, fill = variable),
-           position = "dodge", stat = "identity")
+           position = "dodge", stat = "identity")+
+  geom_point(aes(y = mean_mse),
+             color = "red")  +
+  scale_fill_discrete(name = "Component of MSE/BS",
+                      labels = c("Error/Uncertainty",
+                                 "Bias^2/Reliability",
+                                 "Variance/Resolution")) + 
+  scale_y_continuous(sec.axis = sec_axis(transform = ~.,
+                                         name = "MSE/BS")) +
+  labs(x = NULL,
+       y = "Value",
+       title = "Bias-Variance Tradeoff for Classification") +
+  theme_minimal() +
+  theme(axis.text.y.right = element_text(color = "red"),
+        axis.title.y.right = element_text(color = "red"),
+        legend.position = "bottom")
+
+ggsave("output/class_bv_results.jpg",
+       width = 6.5, height = 4)
 ```
 
 Bias is not changing much, all we are doing is smoothing out the variance
@@ -543,43 +593,168 @@ Bias is not changing much, all we are doing is smoothing out the variance
 ```{r}
 cart_res <- fit_resamples(cart_workflow,
                           control = control_resamples(save_workflow = TRUE),
-                          metrics = metric_set(accuracy),
+                          metrics = metric_set(brier_class),
                           resamples = credit_cv)
 
 bag_res <- fit_resamples(bag_workflow,
                           control = control_resamples(save_workflow = TRUE),
-                          metrics = metric_set(accuracy),
+                          metrics = metric_set(brier_class),
                           resamples = credit_cv)
 
 rf_res <- fit_resamples(rf_workflow,
                           control = control_resamples(save_workflow = TRUE),
-                          metrics = metric_set(accuracy),
+                          metrics = metric_set(brier_class),
                           resamples = credit_cv)
 
-cart_res |> 
-  collect_metrics()
+class_error_df <- tibble(
+  model = c("CART","Bagging","RF"),
+  cv_error = c(
+    cart_res |> 
+      collect_metrics() |>
+      pull(mean),
+    bag_res |>
+      collect_metrics() |>
+      pull(mean),
+    rf_res |>
+      collect_metrics() |>
+      pull(mean)
+  ),
+  oob_error = c(
+    NA,
+    bag_fit |> 
+      extract_fit_engine() |>
+      pluck("prediction.error") ,
+    rf_fit |> 
+      extract_fit_engine() |>
+      pluck("prediction.error") 
+  ),
+  bootstrap_test_errorr = c(
+    cart_class_tradeoff$mean_mse,
+    bag_class_tradeoff$mean_mse,
+    rf_class_tradeoff$mean_mse
+  )
+)
 
-1- cart_class_tradeoff$mean_loss
+class_error_df |>
+  mutate(model = factor(model,levels=c("CART","Bagging","RF"))) |>
+  pivot_longer(-model) |>
+  ggplot(aes(x = model, y = value, fill = name)) + 
+  geom_bar(stat = "identity",
+           position = "dodge") + 
+  scale_fill_discrete(name = "MSE/BS type",
+                      labels = c("Bootstrap test error",
+                                 "CV error",
+                                 "OOB error")) +
+  labs(x = NULL,
+       y = "MSE/BS",
+       title = "Classification Error approximations") + 
+  theme_minimal()
 
-bag_res |>
-  collect_metrics()
-
-1 - bag_fit |> 
-  extract_fit_engine() |>
-  pluck("prediction.error") 
-
-1 - bag_class_tradeoff$mean_loss
-
-rf_res |>
-  collect_metrics()
-
-# why is the oob error so bad at estimating the true error? way worse than CV
-1 - rf_fit |> 
-  extract_fit_engine() |>
-  pluck("prediction.error") 
-
-1 - rf_class_tradeoff$mean_loss
+ggsave("output/class_error_approx.jpg",
+       width = 6.5, height = 4)
 ```
 
-## compare probability averaging with consensus voting
+## Consensus version of bagging and rf
 
+```{r}
+class_bootstrap_cons <- function(workflow_in, train_data, test_data){
+  fit_model <- function(split, workflow) {
+    fit(workflow, data = training(split))
+  }
+  
+  set.seed(2025)
+  bootstrap_data <- bootstraps(train_data, times = 101)
+  
+  all_predictions <-
+    bootstrap_data |>
+    mutate(
+      model_fit = map(splits, fit_model, workflow = workflow_in),
+      predictions = map(model_fit, ~ predict(.x, new_data = test_data, type = "class"))
+    )
+  
+  prediction_df <-
+    all_predictions |>
+    select(id, predictions) |>
+    unnest(predictions) |>
+    group_by(id) |>
+    mutate(Status = rep(test_data$Status, length.out = n()),
+           obs_id = row_number()) |>
+    ungroup()
+  
+  return(prediction_df)
+}
+```
+
+```{r}
+set.seed(2025)
+bag_mod <- 
+  rand_forest(mode = "classification",
+              engine = "ranger",
+              mtry = ncol(credit_data) - 1,
+              trees = 100,
+              min_n = 20)  |>
+  set_engine("ranger",
+             probability = FALSE)
+
+bag_workflow <- 
+  workflow() |> 
+  add_model(bag_mod) |> 
+  add_recipe(class_recipe)
+
+bag_cons_fit <-
+  bag_workflow |>
+  fit(data = credit_train)
+
+bag_consensus_boot_preds <-class_bootstrap_cons(bag_workflow,credit_train, credit_test)
+
+bag_consensus_tradeoff <- bag_consensus_boot_preds |>
+  group_by(obs_id) |>
+  summarise(
+    mode_class = DescTools::Mode(.pred_class),
+    bias = mean(mode_class != Status),
+    variance = mean(.pred_class != mode_class),
+    loss = mean(.pred_class != Status)
+  ) |>
+  ungroup() |>
+  summarize(mean_bias = mean(bias),
+            mean_var = mean(variance),
+            mean_loss = mean(loss))
+```
+
+```{r}
+set.seed(2025)
+rf_mod <- 
+  rand_forest(mode = "classification",
+              engine = "ranger",
+              mtry = floor(sqrt(ncol(credit_data) - 1)),
+              trees = 100,
+              min_n = 20)  |>
+  set_engine("ranger",
+             probability = FALSE)
+
+rf_workflow <- 
+  workflow() |> 
+  add_model(rf_mod) |> 
+  add_recipe(class_recipe)
+
+rf_cons_fit <-
+  rf_workflow |>
+  fit(data = credit_train)
+
+rf_consensus_boot_preds <-class_bootstrap_cons(rf_cons_fit,credit_train, credit_test)
+
+rf_consensus_tradeoff <- rf_consensus_boot_preds |>
+  group_by(obs_id) |>
+  summarise(
+    mode_class = DescTools::Mode(.pred_class),
+    bias = mean(mode_class != Status),
+    variance = mean(.pred_class != mode_class),
+    loss = mean(.pred_class != Status)
+  ) |>
+  ungroup() |>
+  summarize(mean_bias = mean(bias),
+            mean_var = mean(variance),
+            mean_loss = mean(loss))
+```
+
+### comparison with probability version
