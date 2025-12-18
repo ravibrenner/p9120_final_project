@@ -1,7 +1,7 @@
 ---
 title: "Ensemble Trees"
 author: "Ravi Brenner"
-output: html_document
+output: github_document
 ---
 
 ```{r setup, include=FALSE}
@@ -267,7 +267,7 @@ cart_short_tradeoff |>
         legend.position = "bottom")
 
 ggsave("output/reg_bv_results.jpg",
-       width = 6.5, height = 4)
+       width = 6.5, height = 3)
 ```
 
 ## how well does CV and OOB approximate the error?
@@ -289,6 +289,20 @@ rf_res <- fit_resamples(rf_workflow,
 
 error_comp_df <- tibble(
   model = c("CART","Bagging","RF"),
+  train_error = c(
+    predict(cart_fit, new_data = ames_train) |>
+      bind_cols(ames_train) |>
+      rmse(truth = Sale_Price, estimate = .pred) |>
+      pull(.estimate),
+    predict(bag_fit, new_data = ames_train) |>
+      bind_cols(ames_train) |>
+      rmse(truth = Sale_Price, estimate = .pred) |>
+      pull(.estimate),
+    predict(rf_fit, new_data = ames_train) |>
+      bind_cols(ames_train) |>
+      rmse(truth = Sale_Price, estimate = .pred) |>
+      pull(.estimate)
+  ),
   cv_error = c(
     cart_res |> 
       collect_metrics() |>
@@ -327,14 +341,15 @@ error_comp_df |>
   scale_fill_discrete(name = "RMSE type",
                       labels = c("Bootstrap test error",
                                  "CV error",
-                                 "OOB error")) +
+                                 "OOB error",
+                                 "Training error")) +
   labs(x = NULL,
        y = "RMSE",
        title = "Regression Error approximations") + 
   theme_minimal()
 
 ggsave("output/reg_error_approx.jpg",
-       width = 6.5, height = 4)
+       width = 6.5, height = 3)
 ```
 
 
@@ -584,7 +599,44 @@ cart_short_class_tradeoff |>
         legend.position = "bottom")
 
 ggsave("output/class_bv_results.jpg",
-       width = 6.5, height = 4)
+       width = 6.5, height = 3)
+```
+
+with 0-1 loss
+```{r}
+cart_short_class_tradeoff |>
+  mutate(name = "2. CART Short") |>
+  bind_rows(cart_class_tradeoff |>
+              mutate(name = "1. CART Deep")) |>
+  bind_rows(bag_class_tradeoff |>
+              mutate(name = "3. Bagging")) |>
+  bind_rows(rf_class_tradeoff |>
+              mutate(name = "4. RF")) |>
+  bind_rows(rf_small_class_tradeoff |>
+              mutate(name = "5. RF many p")) |>
+  pivot_longer(cols = c(mean_bias, mean_var),
+               names_to = "variable",
+               values_to = "value") |>
+  ggplot(aes(x = name)) +
+  geom_bar(aes(y = value, fill = variable),
+           position = "dodge", stat = "identity")+
+  geom_point(aes(y = mean_loss),
+             color = "blue")  +
+  scale_fill_discrete(name = "Component",
+                      labels = c("Bias",
+                                 "Variance")) + 
+  scale_y_continuous(sec.axis = sec_axis(transform = ~.,
+                                         name = "0-1 Loss")) +
+  labs(x = NULL,
+       y = "Value",
+       title = "Bias-Variance Tradeoff for Classification - 0-1 loss") +
+  theme_minimal() +
+  theme(axis.text.y.right = element_text(color = "blue"),
+        axis.title.y.right = element_text(color = "blue"),
+        legend.position = "bottom")
+
+ggsave("output/class_bv01_results.jpg",
+       width = 6.5, height = 3)
 ```
 
 Bias is not changing much, all we are doing is smoothing out the variance
@@ -608,6 +660,20 @@ rf_res <- fit_resamples(rf_workflow,
 
 class_error_df <- tibble(
   model = c("CART","Bagging","RF"),
+   train_error = c(
+    predict(cart_fit, new_data = credit_train, type = "prob") |>
+      bind_cols(credit_train) |>
+      brier_class(truth = Status,.pred_bad) |>
+      pull(.estimate),
+    predict(bag_fit, new_data = credit_train, type = "prob") |>
+      bind_cols(credit_train) |>
+      brier_class(truth = Status,.pred_bad) |>
+      pull(.estimate),
+   predict(rf_fit, new_data = credit_train, type = "prob") |>
+      bind_cols(credit_train) |>
+      brier_class(truth = Status,.pred_bad) |>
+      pull(.estimate)
+  ),
   cv_error = c(
     cart_res |> 
       collect_metrics() |>
@@ -644,14 +710,15 @@ class_error_df |>
   scale_fill_discrete(name = "MSE/BS type",
                       labels = c("Bootstrap test error",
                                  "CV error",
-                                 "OOB error")) +
+                                 "OOB error",
+                                 "Training error")) +
   labs(x = NULL,
        y = "MSE/BS",
        title = "Classification Error approximations") + 
   theme_minimal()
 
 ggsave("output/class_error_approx.jpg",
-       width = 6.5, height = 4)
+       width = 6.5, height = 3)
 ```
 
 ## Consensus version of bagging and rf
@@ -696,6 +763,9 @@ bag_mod <-
   set_engine("ranger",
              probability = FALSE)
 
+class_recipe <- 
+  recipe(Status ~ ., data = credit_train)
+
 bag_workflow <- 
   workflow() |> 
   add_model(bag_mod) |> 
@@ -705,7 +775,7 @@ bag_cons_fit <-
   bag_workflow |>
   fit(data = credit_train)
 
-bag_consensus_boot_preds <-class_bootstrap_cons(bag_workflow,credit_train, credit_test)
+bag_consensus_boot_preds <- class_bootstrap_cons(bag_workflow,credit_train, credit_test)
 
 bag_consensus_tradeoff <- bag_consensus_boot_preds |>
   group_by(obs_id) |>
