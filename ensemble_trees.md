@@ -263,15 +263,15 @@ rf_short_tradeoff <- bias_var_mse(rf_short_boot_preds) |>
 
 ``` r
 cart_short_tradeoff |>
-  mutate(name = "1. CART Short") |>
+  mutate(name = "4. CART Short") |>
   bind_rows(cart_tradeoff |>
-              mutate(name = "2. CART Deep")) |>
+              mutate(name = "5. CART Deep")) |>
   bind_rows(bag_tradeoff |>
               mutate(name = "3. Bagging")) |>
   bind_rows(rf_tradeoff |>
-              mutate(name = "4. RF")) |>
+              mutate(name = "2. RF")) |>
   bind_rows(rf_short_tradeoff |>
-              mutate(name = "5. RF small")) |>
+              mutate(name = "1. RF small")) |>
   pivot_longer(cols = c(mean_bias_sq, mean_variance, irr_error),
                names_to = "variable",
                values_to = "value") |>
@@ -609,15 +609,15 @@ rf_small_class_tradeoff <- bias_var_mse_class(rf_small_class_boot_preds)
 
 ``` r
 cart_short_class_tradeoff |>
-  mutate(name = "2. CART Short") |>
+  mutate(name = "4. CART Short") |>
   bind_rows(cart_class_tradeoff |>
-              mutate(name = "1. CART Deep")) |>
+              mutate(name = "5. CART Deep")) |>
   bind_rows(bag_class_tradeoff |>
               mutate(name = "3. Bagging")) |>
   bind_rows(rf_class_tradeoff |>
-              mutate(name = "4. RF")) |>
+              mutate(name = "2. RF")) |>
   bind_rows(rf_small_class_tradeoff |>
-              mutate(name = "5. RF many p")) |>
+              mutate(name = "1. RF many p")) |>
   pivot_longer(cols = c(mean_bias_2, mean_var_2, irr_error),
                names_to = "variable",
                values_to = "value") |>
@@ -652,15 +652,15 @@ with 0-1 loss
 
 ``` r
 cart_short_class_tradeoff |>
-  mutate(name = "2. CART Short") |>
+  mutate(name = "4. CART Short") |>
   bind_rows(cart_class_tradeoff |>
-              mutate(name = "1. CART Deep")) |>
+              mutate(name = "5. CART Deep")) |>
   bind_rows(bag_class_tradeoff |>
               mutate(name = "3. Bagging")) |>
   bind_rows(rf_class_tradeoff |>
-              mutate(name = "4. RF")) |>
+              mutate(name = "2. RF")) |>
   bind_rows(rf_small_class_tradeoff |>
-              mutate(name = "5. RF many p")) |>
+              mutate(name = "1. RF many p")) |>
   pivot_longer(cols = c(mean_bias, mean_var),
                names_to = "variable",
                values_to = "value") |>
