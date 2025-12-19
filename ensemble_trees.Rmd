@@ -1,7 +1,9 @@
 ---
 title: "Ensemble Trees"
 author: "Ravi Brenner"
-output: github_document
+output: 
+  pdf_document: default
+  github_document: default
 ---
 
 ```{r setup, include=FALSE}
