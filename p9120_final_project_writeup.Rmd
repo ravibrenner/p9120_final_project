@@ -5,6 +5,7 @@ author: "Ravi Brenner"
 output: 
   pdf_document:
     number_sections: true
+urlcolor: blue
 ---
 
 ```{r setup, include=FALSE}
